@@ -18,7 +18,7 @@ import time
 from datetime import datetime
 import urllib
 
-sys.path += [os.path.join('.', 'python-suds-0.3.9')]
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'python-suds-0.3.9'))
 from suds.client import Client
 from suds.sax.date import DateTime as sudsdatetime
 
