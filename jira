@@ -85,7 +85,7 @@ class JiraHelp(JiraCommand):
 
     name = "help"
     summary = "Get a summary of commands, -v shows all details"
-        
+
     def run(self, logger, jira_env, args):
         progname = sys.argv[0]
         show_api = False
@@ -108,7 +108,7 @@ class JiraHelp(JiraCommand):
 
         logger.info("")
         logger.info("\"%s <command> --help\" provides more usage information"
-                      % (progname))        
+                      % (progname))
         logger.info("")
         return 1
 
@@ -162,12 +162,12 @@ class JiraCat(JiraCommand):
             return soap.service.getIssue(auth, issueKey)
         except Exception, e:
             logger.error(decode(e))
-    
+
     def render(self, logger, jira_env, args, results):
         # For available field names, see the variables in
         # src/java/com/atlassian/jira/rpc/soap/beans/RemoteIssue.java
         fields = jira_env['fieldnames']
-        for f in ['key','summary','reporter','assignee','description', 
+        for f in ['key','summary','reporter','assignee','description',
                   'environment','project',
                   'votes'
                   ]:
@@ -196,17 +196,17 @@ class JiraCat(JiraCommand):
             for v in f['values']:
                 logger.info(getName(fieldName, fields) + ': ' + encode(v))
 
-        return 0    
+        return 0
 
 class JiraCatAndComments(JiraCommand):
     """An example of combining the output of two commands"""
-    
+
     name = "catall"
     summary = "Show all the fields and comments in an issue"
     usage = """
     <issue key>           Issue identifier, e.g. CA-1234
     """
-    
+
     def run(self, logger, jira_env, args):
         command = JiraCat(self.commands)
         results = command.run(logger, jira_env, args)
@@ -241,7 +241,7 @@ class JiraComment(JiraCommand):
         message = args[1]
         if len(args) != 2 or issueKey == None or message == None:
             logger.error(self.usage)
-            return 0        
+            return 0
         try:
             return soap.service.addComment(auth, issueKey, {"body":message})
         except Exception, e:
@@ -272,7 +272,7 @@ class JiraComments(JiraCommand):
             logger.info('[' + dateStr(v['created']) + '] ' + encode(v['author']) + ':')
             logger.info(encode(v['body']))
             logger.info('')
-        return 0    
+        return 0
 
 def getFieldId(name, fields):
     '''TODO cache this, and note getCustomFields() needs admin privilege'''
@@ -307,7 +307,7 @@ Type 'jira create' for more detail on these options.
 
     def run(self, logger, jira_env, args):
         global soap, auth
-        
+
         parser = OptionParser("usage: create <arguments>")
         parser.add_option("-s", "--summary", dest="summary",
                           help="Summary of the new issue")
@@ -347,7 +347,7 @@ Type 'jira create' for more detail on these options.
         if options.summary == None or options.description == None:
             parser.print_help()
             return 0
-        
+
         try:
             priority = 0
             for i, v in enumerate(jira_env['priorities']):
@@ -410,7 +410,7 @@ Type 'jira create' for more detail on these options.
 
     def render(self, logger, jira_env, args, results):
         logger.info('Created issue ' + results['key'])
-        return 0    
+        return 0
 
 def changeStatus(issueKey, action):
     """Generic function for changing the status of an issue"""
@@ -506,7 +506,7 @@ class JiraLink(JiraCommand):
     def run(self, logger, jira_env, args):
         global soap, auth
         logger.error(self.usage)
-        return 0    
+        return 0
 
 class JiraLogin(JiraCommand):
 
@@ -580,12 +580,12 @@ class JiraProjects(JiraCommand):
     def render(self, logger, jira_env, args, results):
         for i, v in enumerate(jira_env['projects']):
             # For available field names, see the variables in
-            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteProject.java 
+            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteProject.java
             logger.info('%s (%s)' % (v['name'], v['key']))
             if v['description'] != None:
                 logger.info('%s' % (v['description']))
             logger.info('')
-        return 0    
+        return 0
 
 class JiraReport(JiraCommand):
 
@@ -601,9 +601,9 @@ class JiraReport(JiraCommand):
             logger.error(self.usage)
             return 0
         reportName = args[0]
-        try: 
-            reportNumber = string.atoi(reportName) 
-        except ValueError: 
+        try:
+            reportNumber = string.atoi(reportName)
+        except ValueError:
             # Find the report number from the report name
             reportNumber = 0
             try:
@@ -634,9 +634,9 @@ class JiraReport(JiraCommand):
         logger.info('%s\t%s\t%s' % ('Key', 'Assignee', 'Summary'))
         for i, v in enumerate(results):
             # For available field names, see the variables in
-            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteIssue.java 
+            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteIssue.java
             logger.info('%s\t%s\t%s' % (v['key'], v['assignee'], v['summary']))
-        return 0    
+        return 0
 
 class JiraCreateUser(JiraCommand):
 
@@ -644,11 +644,11 @@ class JiraCreateUser(JiraCommand):
     summary = "Create new users, needs administrator permission"
     usage = """
     """
-    
+
     def run(self, logger, jira_env, args):
         global soap, auth
         try:
-              
+
            groupname = "jira-developers"
            group = soap.service.getGroup(auth, groupname)
            # TODO this code needs to be edited to fit the local file of users
@@ -681,7 +681,7 @@ class JiraListUsers(JiraCommand):
     summary = "List users, needs administrator permission"
     usage = """
     """
-    
+
     def run(self, logger, jira_env, args):
         global soap, auth
         try:
@@ -712,7 +712,7 @@ class JiraSyncVersions(JiraCommand):
     <source project>              Project key, e.g. TSTONE
     <destination project>         Project key, e.g. TSTTWO
     """
-    
+
     def run(self, logger, jira_env, args):
         global soap, auth
         if len(args) != 2:
@@ -742,7 +742,7 @@ class JiraSyncVersions(JiraCommand):
                                              0
                                              )
                        dateObj = sudsdatetime(pythonDate)
-                       
+
                    else:
                        dateObj = None
                    # See comment in AddVersion about why sequence etc
@@ -765,7 +765,7 @@ class JiraSyncComponents(JiraCommand):
     <source project>              Project key, e.g. TSTONE
     <destination project>         Project key, e.g. TSTTWO
     """
-    
+
     def run(self, logger, jira_env, args):
         global soap, auth
         if len(args) != 2:
@@ -806,7 +806,7 @@ class JiraSyncComponents(JiraCommand):
             logger.exception(e)
 
 class JiraAddUserToGroup(JiraCommand):
-   
+
     name = "addusertogroup"
     summary = "Add a user to a group, needs administrator permission"
     usage = """
@@ -874,12 +874,12 @@ class JiraReports(JiraCommand):
         logger.info('%s\t%s\t%s' % ('Id', 'Name', 'Author'))
         for i, v in enumerate(results):
             # For available field names, see the variables in
-            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteFilter.java 
+            # src/java/com/atlassian/jira/rpc/soap/beans/RemoteFilter.java
             logger.info('%s\t%s\t%s' % (v['id'], v['name'], v['author']))
-        return 0    
+        return 0
 
 class JiraDeleteProject(JiraCommand):
-   
+
     name = "deleteproject"
     summary = "Delete a JIRA project"
     usage = """
@@ -959,7 +959,7 @@ class JiraUpdate(JiraCommand):
             # and getFieldsForEdit isn't it? Basically all the private fields
             # of RemoteField.java
             std_fieldnames = [
-                'key','summary','reporter','assignee','description', 
+                'key','summary','reporter','assignee','description',
                 'environment','project', 'type', 'status', 'priority', 'resolution',
                 'duedate', 'originalEstimate', 'timeLogged', 'votes',
                   ]
@@ -1006,7 +1006,7 @@ class JiraDev(JiraCommand):
             logger.info('Delay: ' + encode(v['delay']) + 'ms')
             logger.info('Last run: ' + encode(v['lastRun']))
             logger.info("")
-        return 0    
+        return 0
 
 class JiraUnitTest(JiraCommand):
 
@@ -1122,7 +1122,7 @@ def getChoicesStr(fields):
         else:
             results += ", " + v['name']
     return results
-            
+
 def getProjectChoicesStr(fields):
     """Concatentate the names of values in a structure"""
     results = ""
@@ -1134,7 +1134,7 @@ def getProjectChoicesStr(fields):
         else:
             results += ", %s (%s)" % (v['name'], v['key'])
     return results
-            
+
 def decode(e):
     """Process an exception for useful feedback"""
     # TODO how to log the fact it is an error, but allow info to be unchanged?
@@ -1143,7 +1143,7 @@ def decode(e):
     if str == 'java.lang.NullPointerException':
         return "Invalid issue key?"
     return e.faultstring
-    
+
 
 def setupLogging(loglevel=logging.INFO):
     """Set up logging, by default just echo to stdout"""
@@ -1255,7 +1255,7 @@ if (__name__ == "__main__"):
         except:
             logger.error('Failed to connect to: ' + server)
             sys.exit(1)
-            
+
         home = "notset"
         try:
            home = os.environ['HOME']
@@ -1271,7 +1271,7 @@ if (__name__ == "__main__"):
 
         if command_name not in ['logout']:
             start_login(jira_env, command_name, com, logger)
-                
+
         # This doesn't actually check that the session is valid
         serverInfo = soap.service.getServerInfo(auth)
         logger.debug("Server info: " + str(serverInfo))
