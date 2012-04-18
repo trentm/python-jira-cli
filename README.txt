@@ -26,9 +26,17 @@ python ./jira -s http://localhost:8080 projects
 should prompt you to log in with your JIRA userid and password and
 then display a list of the available JIRA projects.
 
-Windows users can do the same thing with: 
+Windows
+-------
+
+Windows users can unzip the zip package and use the CLI in a similar way:
 
 C:\Python25\python.exe .\jira -s http://localhost:8080 projects
+
+If you need to access the code directly, you can use Subversion:
+
+svn checkout https://studio.plugins.atlassian.com/svn/JCLIMD/trunk JCLIMD
+
 
 Versions:
 

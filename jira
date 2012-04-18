@@ -18,9 +18,14 @@ import time
 from datetime import datetime
 import urllib
 
+# Add the suds library to the front of sys.path and make it work from
+# locations other than the script's home directory
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.realpath(__file__)), 'python-suds-0.3.9'))
 from suds.client import Client
 from suds.sax.date import DateTime as sudsdatetime
+
+# Note: if you change the SOAP RPC plugin, then change the endpoint too because
+# suds caches the methods it sees as available.
 
 # The proxy object for the JIRA server
 soap = None
@@ -133,11 +138,16 @@ class JiraAttach(JiraCommand):
         fp = open(filename, 'rb')
         file_contents = fp.read()
         fp.close()
-        file_contents = base64.b64encode(file_contents)
+        file_contents = file_contents.encode('base64')
+        name = name.encode("utf-8")
         try:
-            return soap.service.addAttachmentsToIssue(auth, issueKey, [name], [[file_contents]])
+            return soap.service.addBase64EncodedAttachmentsToIssue(auth,
+                                                                   issueKey,
+                                                                   [name],
+                                                                   [file_contents])
+            return 0
         except Exception, e:
-            logger.error(decode(e))
+            logger.error(e)
 
 class JiraCat(JiraCommand):
 
@@ -176,10 +186,16 @@ class JiraCat(JiraCommand):
         logger.info('Status: ' + getName(results['status'], jira_env['statuses']))
         logger.info('Priority: ' + getName(results['priority'], jira_env['priorities']))
         logger.info('Resolution: ' + getName(results['resolution'], jira_env['resolutions']))
-        for f in ['created', 'updated',
+        for f in ['created',
+                  #'updated',
                   'duedate'
                   ]:
             logger.info(getName(f, fields) + ': ' + dateStr(results[f]))
+
+        for f in ['updated',
+                  ]:
+            logger.info('%s: %s' % (getName(f, fields), results[f]))
+
         for f in results['components']:
             logger.info(getName('components', fields) + ': ' + encode(f['name']))
         for f in results['affectsVersions']:
@@ -243,6 +259,9 @@ class JiraComment(JiraCommand):
             logger.error(self.usage)
             return 0
         try:
+            # TODO may have to do it this way with Python 2.6?
+            # comment = client.factory.create('ns0:RemoteComment')
+            # comment.body = 'This is a comment'
             return soap.service.addComment(auth, issueKey, {"body":message})
         except Exception, e:
             logger.error(decode(e))
@@ -297,7 +316,9 @@ class JiraCreate(JiraCommand):
     -e <estimate>
     [-a assignee]
     [-c component]
+    [-r <affects version ids>]
     [-t <type>]
+    [-u <fix version ids>]
     [-z priority]
     [-f fieldname:value1,value2]
     [-y parent issue key]
@@ -327,6 +348,16 @@ Type 'jira create' for more detail on these options.
                           help="Priority of the issue, default: %default.\nChoices: " + priority_choices)
         type_choices = getChoicesStr(jira_env['types'])  + ". Sub-tasks: " + getChoicesStr(jira_env['subtypes'])
 
+        parser.add_option("-c", "--components", dest="components",
+                          default=None,
+                          help="The comma-separated ids of components")
+
+        parser.add_option("-r", "--affectsversions", dest="affectsversions",
+                          default=None,
+                          help="The comma-separated ids of affects versions")
+        parser.add_option("-u", "--fixversions", dest="fixversions",
+                          default=None,
+                          help="The comma-separated ids of fix versions")
         parser.add_option("-t", "--type", dest="issuetype", default="Bug",
                           help="Type of issue, default: %default.\nChoices: " + type_choices)
         parser.add_option("-y", "--parent", dest="parent", default="",
@@ -344,7 +375,7 @@ Type 'jira create' for more detail on these options.
         (options, args) = parser.parse_args()
 
         # Check that the arguments with no defaults have been set
-        if options.summary == None or options.description == None:
+        if options.summary == None:
             parser.print_help()
             return 0
 
@@ -383,9 +414,36 @@ Type 'jira create' for more detail on these options.
                     if cn == "unknown":
                         logger.error("Field name '%s' not found in %s" % (cn_raw, cf_choices))
                         return 0
+                else:
+                    cn = cn_raw
+                    # To create a cascading select, pass both the parent and
+                    # child values and add +1 to the child, e.g.
+                    # -f "customfield_10004:10200" -f "customfield_10004+1:10300"
+                    if "+" in cn_raw:
+                        pk_key, pk_val = cn_raw.split('+')
+                        cn = pk_key + ':' + pk_val
+
                 cfv.append([
                     {'customfieldId': cn, 'values': [cv.split(',')]}
                     ])
+
+            fixVersions = []
+            if options.fixversions:
+                for v in options.fixversions.split(','):
+                    version = {'id': v.strip()}
+                    fixVersions.append(version)
+
+            affectsVersions = []
+            if options.affectsversions:
+                for v in options.affectsversions.split(','):
+                    version = {'id': v.strip()}
+                    affectsVersions.append(version)
+
+            components = []
+            if options.components:
+                for c in options.components.split(','):
+                    component = {'id': c.strip()}
+                    components.append(component)
 
             remoteIssue = {
                 "project": options.project,
@@ -394,6 +452,9 @@ Type 'jira create' for more detail on these options.
                 "priority": priority,
                 "description": options.description,
                 "assignee": options.assignee,
+                "components": components,
+                "affectsVersions": affectsVersions,
+                "fixVersions": fixVersions,
                 "customFieldValues": cfv,
                 }
             if options.parent == "":
@@ -518,14 +579,19 @@ class JiraLogin(JiraCommand):
 
     def run(self, logger, jira_env, args):
         global soap, auth
-        if len(args) > 2:
+        if len(args) != 2:
             logger.error(self.usage)
             return 0
-        if len(args)  == 1:
-            jirauser = args[1]
+        if args[0] != None:
+            jirauser = args[0]
         else:
             jirauser = raw_input('user: ')
-        password = getpass.getpass('password: ')
+
+        if args[1] != None:
+            password = args[1]
+        else:
+            password = getpass.getpass('password: ')
+
         try:
             auth = soap.service.login(jirauser, password)
             # Write the authentication token (not password) to a file
@@ -586,6 +652,44 @@ class JiraProjects(JiraCommand):
                 logger.info('%s' % (v['description']))
             logger.info('')
         return 0
+
+class JiraGetIssues(JiraCommand):
+
+   name = "getissues"
+   summary = "List issues that match a JQL query. Shows issue key, created and summary fields sorted by created. Requires JIRA 4.x"
+   usage = """
+   "<JQL query>"             JQL query, e.g. "Summary ~ '%some%text%' AND Reporter=nagios AND Created > -7d"
+   [<limit>]                   Optional limit to number of issues returned, default 100
+   """
+
+   def run(self, logger, jira_env, args):
+       global soap, auth
+       if len(args) == 2:
+           args = args[0]
+           limit = int(args[1])
+       elif len(args) == 1:
+           args = args[0]
+           limit = 100
+       else:
+           logger.error(self.usage)
+           return 0
+       issues = soap.service.getIssuesFromJqlSearch(auth, args, limit)
+       return issues
+
+   def render(self, logger, jira_env, args, results):
+       def compareCreated(a, b):
+           if a == None:
+               return b
+           if b == None:
+               return a
+           return cmp(a['created'], b['created'])
+       logger.info('key,created,summary')
+       for issue in sorted(results, compareCreated):
+           logger.info(','.join([encode(issue['key']),
+                                 encode(issue['created']),
+                                 unicode(issue['summary']),
+                                 ]))
+       return 0
 
 class JiraReport(JiraCommand):
 
@@ -675,6 +779,162 @@ class JiraCreateUser(JiraCommand):
         except Exception, e:
             logger.exception(e)
 
+class JiraDeactivateUser(JiraCommand):
+
+    name = "deactivateusers"
+    summary = "Deactivate users, needs administrator permission."
+    usage = """
+    """
+
+    # Remove from all groups, add zzz prefix to name, change email to invalid
+    def run(self, logger, jira_env, args):
+        global soap, auth
+        try:
+
+            # Other odd ones:
+            # anybody@zinio.com pjamieson@zinio.com	Anybody Interested
+            active_userids = [
+                #'', #Rangnekar Shantanu
+                #'', #Spirupolo Jorge
+                'admin',
+                'blynn',
+                'ashishp@bsquare.com',
+                'bmeduri', #Meduri Bala
+                'choonyap', #Yap Choon Hong
+                'craigl@bsquare.com',
+                'dbrandt',
+                'eheiker', #Heiker Eric
+                'erauer', #Rauer Eric
+                'ereeves', #Reeves Eric
+                'ericj@bsquare.com',
+                'gstinerman', #Stinerman Gennady
+                'jcastro', #deCastro. Jose
+                'jgarcia', #Garcia Joe
+                'jlang', #Jeff Lang
+                'kkuram', #Kuram Kalyan
+                'llau', #Leidyne Lau
+                'lrepas',
+                'lrepas', #Repas Lester
+                'lswanson', #Jacobson Lana
+                'mabraham', #Mary Abraham
+                'mdoar',
+                'mmcginty', #McGinty Meg
+                'mniebla', #Mario Niebla
+                'ppolinsky', #Polinsky Peter
+                'preddy@zinio.com', #Praveen Reddy
+                'pvasireddy', #Praveen Vasireddy
+                'rshenoy', #Shenoy Radha
+                'schen', #Chen Shirley
+                'steve', #Dere Steve
+                'vdjamgarov@zinio.com', #Vlad Djamgarov
+                'venkatb@bsquare.com',
+                'wcummings', #Cummings Wes,
+                ]
+
+            jira_group_names = [#'atg-dev',
+                                #'jira-administrators',
+                                #'jira-atg',
+                                #'jira-balthaser',
+                                #'jira-bi',
+                                #'jira-bus-solutions',
+                                #'jira-dbas',
+                                #'jira-developers',
+                                #'jira-ecom',
+                                #'jira-facilities',
+                                #'jira-gnws',
+                                #'jira-iphone',
+                                #'jira-itcorp',
+                                #'jira-itops',
+                                #'jira-pm',
+                                'jira-qa',
+                                #'jira-reader',
+                                #'jira-readermac',
+                                #'jira-readerwin',
+                                #'jira-tools',
+                                'jira-users',
+                                ]
+            # Set up the group objects
+            jira_groups = {}
+            for group_name in jira_group_names:
+                logger.info("Getting users in group %s" % group_name)
+                group = soap.service.getGroup(auth, group_name)
+                jira_groups[group_name] = group
+
+            jirausers_group = jira_groups['jira-users']
+            jirausers = jirausers_group['users']
+
+            # Check the active users all exist
+            active_users_checked = {}
+            for userid in active_userids:
+                active_users_checked[userid] = False
+                logger.info("Checking that userid %s exists" % userid)
+                for user in jirausers:
+                    if user['name'] == userid:
+                        # The user exists
+                        active_users_checked[userid] = True
+            problem = False
+            for userid in active_users_checked:
+                if not active_users_checked[userid]:
+                    problem = True
+                    logger.error("Failed to find user " + userid)
+            if problem:
+                return 1
+
+            # Change the user profile details
+            if True:
+                for user in jirausers:
+                    userid = user['name']
+                    if userid not in active_userids:
+                        if True:
+                            fullname = user['fullname']
+                            # Clean up
+                            if fullname.startswith("zzz zzz "):
+                                fullname = fullname.replace("zzz zzz ", "")
+                            if not fullname.startswith('zzz '):
+                                fullname = 'zzz ' + fullname
+                            email = user['email'].replace('.com', '.invalid')
+                            logger.info("Changing user profile for  %s to fullname=%s and email=%s" % (userid, fullname, email))
+                            soap.service.updateUser(auth, userid, fullname, email)
+                    elif False:
+                        fullname = user['fullname']
+                        email = user['email']
+                        if fullname.startswith('zzz '):
+                            fullname = fullname.replace('zzz ', '')
+                            if fullname.startswith('zzz '):
+                                fullname = fullname.replace('zzz ', '')
+                            soap.service.updateUser(auth, userid, fullname, email)
+                        elif email.find('invalid') != -1 and not email.endswith('zinio.com'):
+                            # Some userids are actually email addresses
+                            if userid.find('@') != -1:
+                                email = '%s' % (userid)
+                            else:
+                                email = '%s@zinio.com' % (userid)
+
+                            logger.info("Fixing active user %s email to %s" % (userid,email))
+                            soap.service.updateUser(auth, userid, fullname, email)
+
+            # Remove from all the specified groups
+            if True:
+                for group_name in jira_groups:
+                    # The users in this group
+                    users = group['users']
+                    logger.info("Found %s users in group %s" % (len(users), group_name))
+
+                    for user in users:
+                        userid = user['name']
+                        fullname = user['fullname']
+                        # Decode fullname only into unicode
+                        #fullname = unicode(fullname, encoding="utf-8")
+                        email = user['email']
+
+                        if userid not in active_userids:
+                            logger.info("Removing %s from %s" % (userid, group_name))
+                            soap.service.removeUserFromGroup(auth, group, user)
+
+            return 0
+        except Exception, e:
+            logger.exception(e)
+
 class JiraListUsers(JiraCommand):
 
     name = "listusers"
@@ -700,7 +960,7 @@ class JiraListUsers(JiraCommand):
           return cmp(a['fullname'], b['fullname'])
        for user in sorted(results, compare):
           if user['name'] not in ['authad']:
-             logger.info("%s\t%s" % (user['name'], user['fullname']))
+             logger.info("%s,%s,%s" % (user['name'], user['fullname'], user['email']))
        logger.info("%d users" % len(results))
        return 0
 
@@ -916,17 +1176,18 @@ class JiraAddVersion(JiraCommand):
             return 0
         project = args[0]
         versionname = args[1]
+        # RemoteVersion does not support the description
         year, month, day = args[2].split(':')
 #        schedule = int(args[3])
         try:
             # https://fedorahosted.org/suds/ticket/219 seems to be fixed in 0.3.9
             pythonDate = datetime(int(year), int(month), int(day), 0, 0, 0, 0)
             dateObj = sudsdatetime(pythonDate)
-            version = soap.factory.create('ns0:RemoteVersion')
-            version.name = versionname
-            version.releaseDate = dateObj
-            version.archived = False
-            version.released = True
+            version = {}
+            version['name'] = versionname
+            version['releaseDate'] = dateObj
+            version['archived'] = False
+            version['released'] = True
 
 # Doesn't seem to have any effect. Could expose another move method?
 # version.sequence: 1000 but does this need to be suds.sax.long or such like?
@@ -934,7 +1195,8 @@ class JiraAddVersion(JiraCommand):
             return soap.service.addVersion(auth, project, version)
         except Exception, e:
             print e
-            logger.error(decode(e))
+            logger.exception(e)
+            #logger.error(decode(e))
 
 class JiraUpdate(JiraCommand):
 
@@ -942,7 +1204,7 @@ class JiraUpdate(JiraCommand):
     summary = "Update the contents of an issue"
     usage = """
     <issue key>           Issue identifier, e.g. CA-1234
-    <field>               Name of field to update and new value
+    <field>               Name of field to update
     <value>               New value or comma-separated values for the field
     """
 
@@ -978,6 +1240,48 @@ class JiraUpdate(JiraCommand):
                {'id':fieldName,
                 'values':newValue}
                ])
+        except Exception, e:
+            logger.exception(e)
+
+class JiraUpdateCSS(JiraCommand):
+
+    name = "updatecss"
+    summary = "Update the contents of a custom cascading select field in an issue"
+    usage = """
+    <issue key>           Issue identifier, e.g. CA-1234
+    <field>               Name of field to update, e.g. customfield_10010
+    <value>               New value as comma-separated optionids, e.g. 10011,10014. Values can be found from the links on the fields' option configuration page
+    """
+
+    def run(self, logger, jira_env, args):
+        global soap, auth
+        if len(args) != 3:
+            logger.error(self.usage)
+            return 0
+        issueKey = args[0]
+        fieldName = args[1]
+        parentValue,childValue = args[2].split(',')
+        try:
+            if not fieldName.startswith("customfield_"):
+                try:
+                    jira_env['fieldnames'] = soap.service.getCustomFields(auth)
+                except Exception, e:
+                    # In case we don't have permission to get the fields
+                    jira_env['fieldnames'] = [{'id':-1, 'name':'unavailable'}]
+                cn = getFieldId(fieldName, jira_env['fieldnames'])
+                if cn == "unknown":
+                    logger.error("Field name '%s' not found in %s" % (fieldName, std_fieldnames + jira_env['fieldnames']))
+                    return 0
+                fieldName = cn
+
+            fieldValues = [
+                {'id':fieldName,
+                 'values':[parentValue]},
+                {'id':fieldName + ':1',
+                 'values':[childValue]},
+                ]
+            logger.error("GOT %s" % fieldValues)
+            return soap.service.updateIssue(auth, issueKey, fieldValues)
         except Exception, e:
             logger.exception(e)
 
@@ -1049,6 +1353,7 @@ class Commands:
         self.add(JiraComments)
         self.add(JiraCreate)
         self.add(JiraCreateUser)
+        self.add(JiraDeactivateUser)
         self.add(JiraDeleteProject)
         self.add(JiraHelp)
         self.add(JiraListUsers)
@@ -1058,12 +1363,14 @@ class Commands:
         self.add(JiraRemoveUserFromGroup)
         self.add(JiraReopen)
         self.add(JiraReport)
+        self.add(JiraGetIssues)
         self.add(JiraReports)
         self.add(JiraResolve)
         self.add(JiraSyncComponents)
         self.add(JiraSyncVersions)
         self.add(JiraUnitTest)
         self.add(JiraUpdate)
+        self.add(JiraUpdateCSS)
 
     def add(self, cl):
         # TODO check for duplicates in commands
@@ -1093,11 +1400,13 @@ def encode(s):
     return str(s)
 
 def dateStr(i):
-    '''TODO Why are dates from JIRA at GMT-1?
-    TODO Convert to 12 hour too?'''
+    '''Convert a datetime or String object to a string output format'''
     if i == None or i == 'None':
         return str(i)
-    return "%04d/%02d/%02d %02d:%02d:%02d GMT-1" % (i[0], i[1], i[2], i[3], i[4], i[5])
+    # JIRA 4.4 returns a datetime object
+    if hasattr(i, 'date'):
+        return "%04d/%02d/%02d %02d:%02d:%02d" % (i.year, i.month, i.day, i.hour, i.minute, i.second)
+    return "%04d/%02d/%02d %02d:%02d:%02d" % (i[0], i[1], i[2], i[3], i[4], i[5])
 
 def getName(id, fields):
     '''TODO cache this, and note getCustomFields() needs admin privilege'''
@@ -1138,6 +1447,7 @@ def getProjectChoicesStr(fields):
 def decode(e):
     """Process an exception for useful feedback"""
     # TODO how to log the fact it is an error, but allow info to be unchanged?
+    # TODO now fault not faultstring?
     # The faultType class has faultcode, faultstring and detail
     str = e.faultstring
     if str == 'java.lang.NullPointerException':
@@ -1165,7 +1475,7 @@ class MockLogger:
    def debug(self, s): print (s)
    def error(self, s): print (s)
 
-def start_login(jira_env, command_name, com, logger):
+def start_login(options, jira_env, command_name, com, logger):
     global auth
     # Attempt to recover the cached auth object, or prompt for login
     jirarc_file = jira_env['home'] + os.sep + '.jirarc'
@@ -1179,7 +1489,7 @@ def start_login(jira_env, command_name, com, logger):
                 os.remove(jirarc_file)
             if not os.path.exists(jirarc_file):
                 logger.debug('No cached auth, starting login')
-                rc = com.run('login', logger, jira_env, [])
+                rc = com.run('login', logger, jira_env, [options.user, options.password])
                 if (rc):
                     sys.exit(rc)
             logger.debug('Reading cached auth')
@@ -1230,11 +1540,16 @@ if (__name__ == "__main__"):
                       help="JIRA server and port to use, default: %default")
 #    parser.add_option("-p", "--project", dest="project", default="CA",
 #                      help="Project to use, default: %default")
+    parser.add_option("-u", "--user", dest="user", default=None,
+                      help="JIRA user to use, default: %default")
+    parser.add_option("-p", "--password", dest="password", default=None,
+                      help="JIRA password to use, default: %default")
     (options, args) = parser.parse_args()
 
     logger = setupLogging(options.loglevel)
     jira_env = {}
     server = options.server + "/rpc/soap/jirasoapservice-v2?wsdl"
+    #server = options.server + "/rpc/soap/sharedspace-s1v1?wsdl"
     if not server.startswith('http'):  # also catches https
         server = 'http://' + server # default is no SSL
     if len(args) == 0 or args[0] in ['help']:
@@ -1270,7 +1585,7 @@ if (__name__ == "__main__"):
         jira_env['home'] = home
 
         if command_name not in ['logout']:
-            start_login(jira_env, command_name, com, logger)
+            start_login(options, jira_env, command_name, com, logger)
 
         # This doesn't actually check that the session is valid
         serverInfo = soap.service.getServerInfo(auth)
